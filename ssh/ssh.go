@@ -22,11 +22,15 @@ func GetSSHCommand(host string, port int, user string, sshKey string, args ...st
 		fmt.Sprintf("%s@%s", user, host),
 	}
 
+	fmt.Println(defaultSSHArgs)
+	fmt.Println(args)
 	sshArgs := append(defaultSSHArgs, args...)
 	cmd := exec.Command("ssh", sshArgs...)
 	cmd.Stderr = os.Stderr
 
 	if os.Getenv("DEBUG") != "" {
+		fmt.Println("debug got error from here")
+		fmt.Println(sshArgs)
 		cmd.Stdout = os.Stdout
 	}
 

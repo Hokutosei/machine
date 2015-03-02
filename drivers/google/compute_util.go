@@ -18,6 +18,7 @@ type ComputeUtil struct {
 	instanceName string
 	userName     string
 	project      string
+	source       string
 	service      *raw.Service
 	zoneURL      string
 	globalURL    string
@@ -37,6 +38,21 @@ const (
 	dockerStopCommand  = "sudo service docker stop"
 )
 
+var (
+	project_images = map[string]string{
+		"coreos":    "coreos-cloud",
+		"centos":    "centos-cloud",
+		"backports": "debian-cloud",
+		"debian":    "debian-cloud",
+		"container": "google-containers",
+		"opensuse":  "opensuse-cloud",
+		"rhel":      "rhel-cloud",
+		"sles":      "suse-cloud",
+		"ubuntu":    "ubuntu-os-cloud",
+		"windows":   "windows-os-cloud",
+	}
+)
+
 // NewComputeUtil creates and initializes a ComputeUtil.
 func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 	service, err := newGCEService(driver.storePath)
@@ -49,6 +65,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		userName:     driver.UserName,
 		project:      driver.Project,
 		service:      service,
+		source:       driver.SourceImage,
 		zoneURL:      apiURL + driver.Project + "/zones/" + driver.Zone,
 		globalURL:    apiURL + driver.Project + "/global",
 		SwarmMaster:  driver.SwarmMaster,
@@ -59,6 +76,22 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 
 func (c *ComputeUtil) diskName() string {
 	return c.instanceName + "-disk"
+}
+
+func (c *ComputeUtil) sourceImageName() string {
+	if c.source == "" {
+		return imageName
+	}
+
+	osPrefix := strings.Split(c.source, "-")[0]
+	osProjectName := project_images[osPrefix]
+	op, err := c.service.Images.Get(osProjectName, c.source).Do()
+	if err != nil {
+		return imageName
+	}
+	opName := fmt.Sprintf("image found: %v", op.Name)
+	log.Infof(opName)
+	return op.SelfLink
 }
 
 // disk returns the gce Disk.
@@ -133,6 +166,7 @@ func (c *ComputeUtil) instance() (*raw.Instance, error) {
 // createInstance creates a GCE VM instance.
 func (c *ComputeUtil) createInstance(d *Driver) error {
 	log.Infof("Creating instance.")
+	c.sourceImageName()
 	// The rule will either exist or be nil in case of an error.
 	if rule, _ := c.firewallRule(); rule == nil {
 		if err := c.createFirewallRule(); err != nil {
@@ -176,7 +210,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	if disk == nil || err != nil {
 		instance.Disks[0].InitializeParams = &raw.AttachedDiskInitializeParams{
 			DiskName:    c.diskName(),
-			SourceImage: imageName,
+			SourceImage: c.sourceImageName(),
 			// The maximum supported disk size is 1000GB, the cast should be fine.
 			DiskSizeGb: int64(d.DiskSize),
 		}
@@ -188,7 +222,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	if err != nil {
 		return err
 	}
-	log.Infof("Waiting for Instance...")
+	log.Infof("Waiting for Instance Did inser instance...")
 	if err = c.waitForRegionalOp(op.Name); err != nil {
 		return err
 	}
@@ -226,7 +260,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 
 	log.Info("Configuring Machine...")
 
-	log.Debugf("Setting hostname: %s", d.MachineName)
+	//log.Debugf("Setting hostname: %s", d.MachineName)
 	cmd, err := d.GetSSHCommand(fmt.Sprintf(
 		"echo \"127.0.0.1 %s\" | sudo tee -a /etc/hosts && sudo hostname %s && echo \"%s\" | sudo tee /etc/hostname",
 		d.MachineName,
@@ -235,9 +269,13 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	))
 
 	if err != nil {
+		fmt.Println("got error here")
+		fmt.Println(err)
 		return err
 	}
 	if err := cmd.Run(); err != nil {
+		fmt.Println("got error on cmd.Run")
+		fmt.Println(err)
 		return err
 	}
 

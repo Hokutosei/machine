@@ -25,6 +25,7 @@ type Driver struct {
 	MachineType      string
 	Scopes           string
 	DiskSize         int
+	SourceImage      string
 	storePath        string
 	UserName         string
 	Project          string
@@ -93,6 +94,11 @@ func GetCreateFlags() []cli.Flag {
 			Value:  10,
 			EnvVar: "GOOGLE_DISK_SIZE",
 		},
+		cli.StringFlag{
+			Name:   "google-image",
+			Usage:  "GCE Source Image",
+			EnvVar: "GOOGLE_SOURCE_IMAGE",
+		},
 	}
 }
 
@@ -118,6 +124,7 @@ func (driver *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	driver.Zone = flags.String("google-zone")
 	driver.MachineType = flags.String("google-machine-type")
 	driver.DiskSize = flags.Int("google-disk-size")
+	driver.SourceImage = flags.String("google-image")
 	driver.UserName = flags.String("google-username")
 	driver.Project = flags.String("google-project")
 	driver.Scopes = flags.String("google-scopes")
@@ -277,12 +284,17 @@ func (d *Driver) StartDocker() error {
 
 func (d *Driver) StopDocker() error {
 	log.Debug("Stopping Docker...")
+	fmt.Println("stop docker..")
 
 	cmd, err := d.GetSSHCommand("sudo service docker stop")
 	if err != nil {
+		fmt.Println(err)
+		fmt.Println("error stopping docker services")
 		return err
 	}
 	if err := cmd.Run(); err != nil {
+		fmt.Println(err)
+		fmt.Println("got error in StopDocker cmd.Run()")
 		return err
 	}
 
@@ -297,6 +309,8 @@ func (d *Driver) GetDockerConfigDir() string {
 func (driver *Driver) GetSSHCommand(args ...string) (*exec.Cmd, error) {
 	ip, err := driver.GetIP()
 	if err != nil {
+		fmt.Println(err)
+		fmt.Println("got error in GetSSHCommand!")
 		return nil, err
 	}
 	return ssh.GetSSHCommand(ip, 22, driver.UserName, driver.sshKeyPath, args...), nil
