@@ -95,7 +95,7 @@ func GetCreateFlags() []cli.Flag {
 			EnvVar: "GOOGLE_DISK_SIZE",
 		},
 		cli.StringFlag{
-			Name:   "google-image",
+			Name:   "google-source-image",
 			Usage:  "GCE Source Image",
 			EnvVar: "GOOGLE_SOURCE_IMAGE",
 		},
@@ -124,7 +124,7 @@ func (driver *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	driver.Zone = flags.String("google-zone")
 	driver.MachineType = flags.String("google-machine-type")
 	driver.DiskSize = flags.Int("google-disk-size")
-	driver.SourceImage = flags.String("google-image")
+	driver.SourceImage = flags.String("google-source-image")
 	driver.UserName = flags.String("google-username")
 	driver.Project = flags.String("google-project")
 	driver.Scopes = flags.String("google-scopes")
