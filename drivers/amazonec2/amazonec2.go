@@ -11,7 +11,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/codegangsta/cli"
@@ -19,6 +18,7 @@ import (
 	"github.com/docker/machine/drivers/amazonec2/amz"
 	"github.com/docker/machine/ssh"
 	"github.com/docker/machine/state"
+	"github.com/docker/machine/utils"
 )
 
 const (
@@ -29,47 +29,53 @@ const (
 	ipRange                  = "0.0.0.0/0"
 	dockerConfigDir          = "/etc/docker"
 	machineSecurityGroupName = "docker-machine"
-	dockerPort               = 2376
+)
+
+var (
+	dockerPort = 2376
+	swarmPort  = 3376
 )
 
 type Driver struct {
-	Id                string
-	AccessKey         string
-	SecretKey         string
-	SessionToken      string
-	Region            string
-	AMI               string
-	SSHKeyID          int
-	KeyName           string
-	InstanceId        string
-	InstanceType      string
-	IPAddress         string
-	PrivateIPAddress  string
-	MachineName       string
-	SecurityGroupId   string
-	SecurityGroupName string
-	ReservationId     string
-	RootSize          int64
-	VpcId             string
-	SubnetId          string
-	Zone              string
-	CaCertPath        string
-	PrivateKeyPath    string
-	SwarmMaster       bool
-	SwarmHost         string
-	SwarmDiscovery    string
-	storePath         string
-	keyPath           string
+	Id                 string
+	AccessKey          string
+	SecretKey          string
+	SessionToken       string
+	Region             string
+	AMI                string
+	SSHKeyID           int
+	KeyName            string
+	InstanceId         string
+	InstanceType       string
+	IPAddress          string
+	PrivateIPAddress   string
+	MachineName        string
+	SecurityGroupId    string
+	SecurityGroupName  string
+	ReservationId      string
+	RootSize           int64
+	IamInstanceProfile string
+	VpcId              string
+	SubnetId           string
+	Zone               string
+	CaCertPath         string
+	PrivateKeyPath     string
+	SwarmMaster        bool
+	SwarmHost          string
+	SwarmDiscovery     string
+	storePath          string
+	keyPath            string
 }
 
 type CreateFlags struct {
-	AccessKey    *string
-	SecretKey    *string
-	Region       *string
-	AMI          *string
-	InstanceType *string
-	SubnetId     *string
-	RootSize     *int64
+	AccessKey          *string
+	SecretKey          *string
+	Region             *string
+	AMI                *string
+	InstanceType       *string
+	SubnetId           *string
+	RootSize           *int64
+	IamInstanceProfile *string
 }
 
 func init() {
@@ -146,6 +152,10 @@ func GetCreateFlags() []cli.Flag {
 			Value:  defaultRootSize,
 			EnvVar: "AWS_ROOT_SIZE",
 		},
+		cli.StringFlag{
+			Name:  "amazonec2-iam-instance-profile",
+			Usage: "AWS IAM Instance Profile",
+		},
 	}
 }
 
@@ -177,6 +187,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	zone := flags.String("amazonec2-zone")
 	d.Zone = zone[:]
 	d.RootSize = int64(flags.Int("amazonec2-root-size"))
+	d.IamInstanceProfile = flags.String("amazonec2-iam-instance-profile")
 	d.SwarmMaster = flags.Bool("swarm-master")
 	d.SwarmHost = flags.String("swarm-host")
 	d.SwarmDiscovery = flags.String("swarm-discovery")
@@ -191,6 +202,21 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 
 	if d.SubnetId == "" && d.VpcId == "" {
 		return fmt.Errorf("amazonec2 driver requires either the --amazonec2-subnet-id or --amazonec2-vpc-id option")
+	}
+
+	if d.isSwarmMaster() {
+		u, err := url.Parse(d.SwarmHost)
+		if err != nil {
+			return fmt.Errorf("error parsing swarm host: %s", err)
+		}
+
+		parts := strings.Split(u.Host, ":")
+		port, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return err
+		}
+
+		swarmPort = port
 	}
 
 	return nil
@@ -210,11 +236,60 @@ func (d *Driver) checkPrereqs() error {
 	if key != nil {
 		return fmt.Errorf("There is already a keypair with the name %s.  Please either remove that keypair or use a different machine name.", d.MachineName)
 	}
+
+	regionZone := d.Region + d.Zone
+	if d.SubnetId == "" {
+		filters := []amz.Filter{
+			{
+				Name:  "availabilityZone",
+				Value: regionZone,
+			},
+			{
+				Name:  "vpc-id",
+				Value: d.VpcId,
+			},
+		}
+
+		subnets, err := d.getClient().GetSubnets(filters)
+		if err != nil {
+			return err
+		}
+
+		if len(subnets) == 0 {
+			return fmt.Errorf("unable to find a subnet in the zone: %s", regionZone)
+		}
+
+		d.SubnetId = subnets[0].SubnetId
+
+		// try to find default
+		if len(subnets) > 1 {
+			for _, subnet := range subnets {
+				if subnet.DefaultForAz {
+					d.SubnetId = subnet.SubnetId
+					break
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
 func (d *Driver) PreCreateCheck() error {
 	return d.checkPrereqs()
+}
+
+func (d *Driver) instanceIpAvailable() bool {
+	ip, err := d.GetIP()
+	if err != nil {
+		log.Debug(err)
+	}
+	if ip != "" {
+		d.IPAddress = ip
+		log.Debugf("Got the IP Address, it's %q", d.IPAddress)
+		return true
+	}
+	return false
 }
 
 func (d *Driver) Create() error {
@@ -239,38 +314,19 @@ func (d *Driver) Create() error {
 		VolumeType:          "gp2",
 	}
 
-	// get the subnet id
-	regionZone := d.Region + d.Zone
-	subnetId := d.SubnetId
-
-	if d.SubnetId == "" {
-		subnets, err := d.getClient().GetSubnets()
-		if err != nil {
-			return err
-		}
-
-		for _, s := range subnets {
-			if s.AvailabilityZone == regionZone {
-				subnetId = s.SubnetId
-				break
-			}
-		}
-
-	}
-
-	if subnetId == "" {
-		return fmt.Errorf("unable to find a subnet in the zone: %s", regionZone)
-	}
-
-	log.Debugf("launching instance in subnet %s", subnetId)
-	instance, err := d.getClient().RunInstance(d.AMI, d.InstanceType, d.Zone, 1, 1, d.SecurityGroupId, d.KeyName, subnetId, bdm)
+	log.Debugf("launching instance in subnet %s", d.SubnetId)
+	instance, err := d.getClient().RunInstance(d.AMI, d.InstanceType, d.Zone, 1, 1, d.SecurityGroupId, d.KeyName, d.SubnetId, bdm, d.IamInstanceProfile)
 
 	if err != nil {
 		return fmt.Errorf("Error launching instance: %s", err)
 	}
 
 	d.InstanceId = instance.InstanceId
-	d.IPAddress = instance.IpAddress
+
+	log.Debug("waiting for ip address to become available")
+	if err := utils.WaitFor(d.instanceIpAvailable); err != nil {
+		return err
+	}
 
 	if len(instance.NetworkInterfaceSet) > 0 {
 		d.PrivateIPAddress = instance.NetworkInterfaceSet[0].PrivateIpAddress
@@ -320,7 +376,6 @@ func (d *Driver) Create() error {
 }
 
 func (d *Driver) GetURL() (string, error) {
-
 	if d.IPAddress == "" {
 		return "", nil
 	}
@@ -352,6 +407,8 @@ func (d *Driver) GetState() (state.State, error) {
 		return state.Stopping, nil
 	case "stopped":
 		return state.Stopped, nil
+	default:
+		return state.Error, nil
 	}
 	return state.None, nil
 }
@@ -365,9 +422,6 @@ func (d *Driver) Start() error {
 		return err
 	}
 
-	if err := d.updateDriver(); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -467,29 +521,6 @@ func (d *Driver) sshKeyPath() string {
 	return path.Join(d.storePath, "id_rsa")
 }
 
-func (d *Driver) updateDriver() error {
-	inst, err := d.getInstance()
-	if err != nil {
-		return err
-	}
-	// wait for ipaddress
-	for {
-		i, err := d.getInstance()
-		if err != nil {
-			return err
-		}
-		if i.IpAddress == "" {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		d.InstanceId = inst.InstanceId
-		d.IPAddress = inst.IpAddress
-		break
-	}
-	return nil
-}
-
 func (d *Driver) publicSSHKeyPath() string {
 	return d.sshKeyPath() + ".pub"
 }
@@ -503,19 +534,19 @@ func (d *Driver) getInstance() (*amz.EC2Instance, error) {
 	return &instance, nil
 }
 
-func (d *Driver) waitForInstance() error {
-	for {
-		st, err := d.GetState()
-		if err != nil {
-			return err
-		}
-		if st == state.Running {
-			break
-		}
-		time.Sleep(1 * time.Second)
+func (d *Driver) instanceIsRunning() bool {
+	st, err := d.GetState()
+	if err != nil {
+		log.Debug(err)
 	}
+	if st == state.Running {
+		return true
+	}
+	return false
+}
 
-	if err := d.updateDriver(); err != nil {
+func (d *Driver) waitForInstance() error {
+	if err := utils.WaitFor(d.instanceIsRunning); err != nil {
 		return err
 	}
 
@@ -562,6 +593,17 @@ func (d *Driver) isSwarmMaster() bool {
 	return d.SwarmMaster
 }
 
+func (d *Driver) securityGroupAvailableFunc(id string) func() bool {
+	return func() bool {
+		_, err := d.getClient().GetSecurityGroupById(id)
+		if err == nil {
+			return true
+		}
+		log.Debug(err)
+		return false
+	}
+}
+
 func (d *Driver) configureSecurityGroup(groupName string) error {
 	log.Debugf("configuring security group in %s", d.VpcId)
 
@@ -590,44 +632,14 @@ func (d *Driver) configureSecurityGroup(groupName string) error {
 		securityGroup = group
 		// wait until created (dat eventual consistency)
 		log.Debugf("waiting for group (%s) to become available", group.GroupId)
-		for {
-			_, err := d.getClient().GetSecurityGroupById(group.GroupId)
-			if err == nil {
-				break
-			}
-			log.Debug(err)
-			time.Sleep(1 * time.Second)
+		if err := utils.WaitFor(d.securityGroupAvailableFunc(group.GroupId)); err != nil {
+			return err
 		}
 	}
 
 	d.SecurityGroupId = securityGroup.GroupId
 
-	perms := configureSecurityGroupPermissions(securityGroup)
-
-	// configure swarm permission if needed
-	if d.isSwarmMaster() {
-		u, err := url.Parse(d.SwarmHost)
-		if err != nil {
-			return fmt.Errorf("error authorizing port for swarm: %s", err)
-		}
-
-		parts := strings.Split(u.Host, ":")
-		port, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return err
-		}
-
-		log.Debugf("authorizing swarm on port %d", port)
-
-		perms = append(perms, amz.IpPermission{
-			IpProtocol: "tcp",
-			FromPort:   port,
-			ToPort:     port,
-			IpRange:    ipRange,
-		})
-	}
-
-	log.Debugf("configuring security group authorization for %s", ipRange)
+	perms := d.configureSecurityGroupPermissions(securityGroup)
 
 	if len(perms) != 0 {
 		log.Debugf("authorizing group %s with permissions: %v", securityGroup.GroupName, perms)
@@ -640,41 +652,51 @@ func (d *Driver) configureSecurityGroup(groupName string) error {
 	return nil
 }
 
-func configureSecurityGroupPermissions(group *amz.SecurityGroup) []amz.IpPermission {
+func (d *Driver) configureSecurityGroupPermissions(group *amz.SecurityGroup) []amz.IpPermission {
 	hasSshPort := false
 	hasDockerPort := false
+	hasSwarmPort := false
 	for _, p := range group.IpPermissions {
 		switch p.FromPort {
 		case 22:
 			hasSshPort = true
 		case dockerPort:
 			hasDockerPort = true
+		case swarmPort:
+			hasSwarmPort = true
 		}
 	}
 
 	perms := []amz.IpPermission{}
 
 	if !hasSshPort {
-		perm := amz.IpPermission{
+		perms = append(perms, amz.IpPermission{
 			IpProtocol: "tcp",
 			FromPort:   22,
 			ToPort:     22,
 			IpRange:    ipRange,
-		}
-
-		perms = append(perms, perm)
+		})
 	}
 
 	if !hasDockerPort {
-		perm := amz.IpPermission{
+		perms = append(perms, amz.IpPermission{
 			IpProtocol: "tcp",
 			FromPort:   dockerPort,
 			ToPort:     dockerPort,
 			IpRange:    ipRange,
-		}
-
-		perms = append(perms, perm)
+		})
 	}
+
+	if !hasSwarmPort && d.SwarmMaster {
+		perms = append(perms, amz.IpPermission{
+			IpProtocol: "tcp",
+			FromPort:   swarmPort,
+			ToPort:     swarmPort,
+			IpRange:    ipRange,
+		})
+	}
+
+	log.Debugf("configuring security group authorization for %s", ipRange)
 
 	return perms
 }
