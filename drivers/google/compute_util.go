@@ -166,7 +166,6 @@ func (c *ComputeUtil) instance() (*raw.Instance, error) {
 // createInstance creates a GCE VM instance.
 func (c *ComputeUtil) createInstance(d *Driver) error {
 	log.Infof("Creating instance.")
-	c.sourceImageName()
 	// The rule will either exist or be nil in case of an error.
 	if rule, _ := c.firewallRule(); rule == nil {
 		if err := c.createFirewallRule(); err != nil {
