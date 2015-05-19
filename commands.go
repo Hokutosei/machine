@@ -325,8 +325,21 @@ func cmdCreate(c *cli.Context) {
 		log.Fatalf("error setting active host: %v", err)
 	}
 
+	info := ""
+	userShell := filepath.Base(os.Getenv("SHELL"))
+
+	switch userShell {
+	case "fish":
+		info = fmt.Sprintf("%s env %s | source", c.App.Name, name)
+	default:
+		info = fmt.Sprintf("$(%s env %s)", c.App.Name, name)
+	}
+
 	log.Infof("%q has been created and is now the active machine.", name)
-	log.Infof("To point your Docker client at it, run this in your shell: $(%s env %s)", c.App.Name, name)
+
+	if info != "" {
+		log.Infof("To point your Docker client at it, run this in your shell: %s", info)
+	}
 }
 
 func cmdConfig(c *cli.Context) {
@@ -473,7 +486,7 @@ func cmdEnv(c *cli.Context) {
 	if c.Bool("unset") {
 		switch userShell {
 		case "fish":
-			fmt.Printf("set -e DOCKER_TLS_VERIFY\nset -e DOCKER_CERT_PATH\nset -e DOCKER_HOST\n")
+			fmt.Printf("set -e DOCKER_TLS_VERIFY;\nset -e DOCKER_CERT_PATH;\nset -e DOCKER_HOST;\n")
 		default:
 			fmt.Println("unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_HOST")
 		}
@@ -510,10 +523,10 @@ func cmdEnv(c *cli.Context) {
 
 	switch userShell {
 	case "fish":
-		fmt.Printf("set -x DOCKER_TLS_VERIFY yes\nset -x DOCKER_CERT_PATH %s\nset -x DOCKER_HOST %s\n",
+		fmt.Printf("set -x DOCKER_TLS_VERIFY 1;\nset -x DOCKER_CERT_PATH %s;\nset -x DOCKER_HOST %s;\n",
 			cfg.machineDir, dockerHost)
 	default:
-		fmt.Printf("export DOCKER_TLS_VERIFY=yes\nexport DOCKER_CERT_PATH=%s\nexport DOCKER_HOST=%s\n",
+		fmt.Printf("export DOCKER_TLS_VERIFY=1\nexport DOCKER_CERT_PATH=%s\nexport DOCKER_HOST=%s\n",
 			cfg.machineDir, dockerHost)
 	}
 }

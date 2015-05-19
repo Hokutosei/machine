@@ -79,7 +79,7 @@ needed to connect to the instance.
 
 ```
 $ docker-machine env dev
-export DOCKER_TLS_VERIFY=yes
+export DOCKER_TLS_VERIFY=1
 export DOCKER_CERT_PATH=/home/ehazlett/.docker/machines/.client
 export DOCKER_HOST=tcp://192.168.99.100:2376
 
@@ -315,7 +315,7 @@ For example:
 
 ```
 $ docker-machine env --swarm swarm-master
-export DOCKER_TLS_VERIFY=yes
+export DOCKER_TLS_VERIFY=1
 export DOCKER_CERT_PATH=/home/ehazlett/.docker/machines/.client
 export DOCKER_HOST=tcp://192.168.99.100:3376
 ```
@@ -390,7 +390,7 @@ $ $(docker-machine env dev)
 $ env | grep DOCKER
 DOCKER_HOST=tcp://192.168.99.101:2376
 DOCKER_CERT_PATH=/Users/nathanleclaire/.docker/machines/.client
-DOCKER_TLS_VERIFY=yes
+DOCKER_TLS_VERIFY=1
 $ # If you run a docker command, now it will run against that host.
 $ $(docker-machine env -u)
 $ env | grep DOCKER
@@ -590,6 +590,7 @@ Options:
  - `--amazonec2-access-key`: **required** Your access key id for the Amazon Web Services API.
  - `--amazonec2-ami`: The AMI ID of the instance to use  Default: `ami-4ae27e22`
  - `--amazonec2-instance-type`: The instance type to run.  Default: `t2.micro`
+ - `--amazonec2-iam-instance-profile`: The AWS IAM role name to be used as the instance profile
  - `--amazonec2-region`: The region to use when launching the instance.  Default: `us-east-1`
  - `--amazonec2-root-size`: The root disk size of the instance (in GB).  Default: `16`
  - `--amazonec2-secret-key`: **required** Your secret access key for the Amazon Web Services API.
@@ -629,7 +630,10 @@ Options:
  - `--digitalocean-access-token`: Your personal access token for the Digital Ocean API.
  - `--digitalocean-image`: The name of the Digital Ocean image to use. Default: `docker`
  - `--digitalocean-region`: The region to create the droplet in, see [Regions API](https://developers.digitalocean.com/documentation/v2/#regions) for how to get a list. Default: `nyc3`
- - `--digitalocean-size`: The size of the Digital Ocean driver (larger than default options are of the form `2gb`). Default: `512mb`
+ - `--digitalocean-size`: The size of the Digital Ocean droplet (larger than default options are of the form `2gb`). Default: `512mb`
+ - `--digitalocean-ipv6`: Enable IPv6 support for the droplet. Default: `false`
+ - `--digitalocean-private-networking`: Enable private networking support for the droplet. Default: `false`
+ - `--digitalocean-backups`: Enable Digital Oceans backups for the droplet. Default: `false`
 
 The DigitalOcean driver will use `ubuntu-14-04-x64` as the default image.
 
